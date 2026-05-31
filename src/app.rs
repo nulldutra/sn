@@ -144,29 +144,22 @@ impl App {
     }
 
     fn handle_edit_note_key(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Esc {
+            self.save_and_exit_edit();
+            return;
+        }
+
         let Mode::EditNote {
-            note_index,
             content,
             cursor,
             status,
+            ..
         } = &mut self.mode
         else {
             return;
         };
 
         match key.code {
-            KeyCode::Esc => self.mode = Mode::Normal,
-            KeyCode::Char('s') => {
-                let path = self.notes[*note_index].path.clone();
-                let saved = content.clone();
-                match notes::save_note(&path, &saved) {
-                    Ok(()) => {
-                        self.notes[*note_index].content = saved;
-                        *status = Some("Saved".to_string());
-                    }
-                    Err(err) => *status = Some(err.to_string()),
-                }
-            }
             KeyCode::Backspace => {
                 delete_before_cursor(content, cursor);
                 *status = None;
@@ -196,6 +189,30 @@ impl App {
                 *status = None;
             }
             _ => {}
+        }
+    }
+
+    fn save_and_exit_edit(&mut self) {
+        let (note_index, content) = match &self.mode {
+            Mode::EditNote {
+                note_index,
+                content,
+                ..
+            } => (*note_index, content.clone()),
+            _ => return,
+        };
+
+        let path = self.notes[note_index].path.clone();
+        match notes::save_note(&path, &content) {
+            Ok(()) => {
+                self.notes[note_index].content = content;
+                self.mode = Mode::Normal;
+            }
+            Err(err) => {
+                if let Mode::EditNote { status, .. } = &mut self.mode {
+                    *status = Some(err.to_string());
+                }
+            }
         }
     }
 

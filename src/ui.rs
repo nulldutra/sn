@@ -161,13 +161,8 @@ fn render_preview_panel(frame: &mut Frame, area: Rect, app: &mut App) {
 
     if editing {
         if let Some(status) = app.edit_status() {
-            let color = if status == "Saved" {
-                Color::Green
-            } else {
-                Color::Red
-            };
             frame.render_widget(
-                Paragraph::new(status).style(Style::default().fg(color)),
+                Paragraph::new(status).style(Style::default().fg(Color::Red)),
                 Rect {
                     x: inner.x,
                     y: inner.y,
@@ -191,7 +186,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     let help = if app.is_create_prompt_open() {
         "Enter create  Esc cancel"
     } else if app.is_editing() {
-        "Esc normal  s save  arrows move  type to edit"
+        "Esc save & exit  arrows move  type to edit"
     } else {
         "↑↓/jk notes  [/] scroll  a new  i edit  g/G top/bottom  q quit"
     };
