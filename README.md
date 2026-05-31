@@ -16,8 +16,6 @@ cargo build --release
 
 Prebuilt binaries for Linux, macOS, and Windows are attached to [GitHub Releases](https://github.com/nulldutra/sn/releases).
 
-Create a release on GitHub (tag + publish) to trigger the build workflow automatically.
-
 ## Usage
 
 ```bash
