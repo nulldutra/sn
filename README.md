@@ -35,21 +35,24 @@ Optional environment variables:
 
 ![](./.assets/image.png)
 
-- **Left panel**: note list (`.md` and `.txt` files)
+- **Left panel**: folder browser with notes (`.md` and `.txt` files)
 - **Right panel**: rendered Markdown preview (raw text while editing)
 
 ## Keybindings
 
-| Key           | Action                |
-|---------------|-----------------------|
-| `a`           | Create a new note     |
-| `i`           | Edit selected note    |
-| `Esc`         | Save and exit edit mode |
-| `↑` / `↓`     | Navigate notes        |
-| `j` / `k`     | Navigate notes        |
-| `[` / `]`     | Scroll note content   |
-| `g` / `G`     | First / last note     |
-| `q` / `Esc`   | Quit                  |
+| Key           | Action                    |
+|---------------|---------------------------|
+| `a`           | Create a new note         |
+| `i`           | Edit selected note        |
+| `Esc`         | Save and exit edit mode   |
+| `h` / `←`     | Go to parent directory    |
+| `l` / `→`     | Enter folder              |
+| `Enter`       | Enter folder / go up      |
+| `↑` / `↓`     | Navigate list             |
+| `j` / `k`     | Navigate list             |
+| `[` / `]`     | Scroll note content       |
+| `g` / `G`     | First / last item         |
+| `q` / `Esc`   | Quit                      |
 
 ## License
 

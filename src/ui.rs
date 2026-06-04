@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::app::App;
+use crate::notes::BrowserEntry;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -33,18 +34,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
 fn render_notes_panel(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default()
-        .title(" Notes ")
+        .title(app.notes_panel_title())
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
-    if app.notes.is_empty() {
+    if app.entries.is_empty() {
         let empty = Paragraph::new(vec![
             Line::from(Span::styled(
                 "No notes in:",
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
-                app.notes_dir.display().to_string(),
+                app.current_dir.display().to_string(),
                 Style::default().add_modifier(Modifier::DIM),
             )),
         ])
@@ -55,19 +56,28 @@ fn render_notes_panel(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 
     let items: Vec<ListItem> = app
-        .notes
+        .entries
         .iter()
         .enumerate()
-        .map(|(i, note)| {
+        .map(|(i, entry)| {
+            let (label, entry_style) = match entry {
+                BrowserEntry::Parent => ("../".to_string(), Style::default().fg(Color::DarkGray)),
+                BrowserEntry::Directory { name, .. } => {
+                    (format!("{name}/"), Style::default().fg(Color::Yellow))
+                }
+                BrowserEntry::Note(note) => (note.name.clone(), Style::default()),
+            };
+
             let style = if i == app.selected {
                 Style::default()
                     .bg(Color::Blue)
                     .fg(Color::Black)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default()
+                entry_style
             };
-            ListItem::new(note.name.as_str()).style(style)
+
+            ListItem::new(label).style(style)
         })
         .collect();
 
@@ -78,7 +88,7 @@ fn render_notes_panel(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let footer_y = area.bottom().saturating_sub(2);
     if footer_y > area.top() {
-        let footer = Paragraph::new(format!("{}/{}", app.selected + 1, app.notes.len()))
+        let footer = Paragraph::new(format!("{}/{}", app.selected + 1, app.entries.len()))
             .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(
             footer,
@@ -97,17 +107,7 @@ fn render_preview_panel(frame: &mut Frame, area: Rect, app: &mut App) {
     app.clamp_preview_scroll(inner_height);
 
     let editing = app.is_editing_selected();
-    let title = app
-        .selected_note()
-        .map(|n| {
-            if editing {
-                format!(" {} [EDIT] ", n.name)
-            } else {
-                format!(" {} ", n.name)
-            }
-        })
-        .unwrap_or_else(|| " Preview ".to_string());
-
+    let title = app.preview_title();
     let border_color = if editing { Color::Yellow } else { Color::Cyan };
     let block = Block::default()
         .title(title)
@@ -116,10 +116,39 @@ fn render_preview_panel(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let inner = block.inner(area);
 
-    if app.notes.is_empty() {
-        let empty =
-            Paragraph::new("Select or create a note.").style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(empty.block(block), area);
+    if app.selected_note().is_none() {
+        let message = if app.entries.is_empty() {
+            "Select or create a note."
+        } else {
+            match app.entries.get(app.selected) {
+                Some(BrowserEntry::Directory { name, .. }) => {
+                    frame.render_widget(
+                        Paragraph::new(format!("Folder: {name}/\nPress l or Enter to open."))
+                            .style(Style::default().fg(Color::DarkGray))
+                            .block(block),
+                        area,
+                    );
+                    return;
+                }
+                Some(BrowserEntry::Parent) => {
+                    frame.render_widget(
+                        Paragraph::new("Parent directory\nPress l or Enter to go up.")
+                            .style(Style::default().fg(Color::DarkGray))
+                            .block(block),
+                        area,
+                    );
+                    return;
+                }
+                _ => "Select a note to preview.",
+            }
+        };
+
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(Style::default().fg(Color::DarkGray))
+                .block(block),
+            area,
+        );
         return;
     }
 
@@ -197,7 +226,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     } else if app.is_editing() {
         "Esc save & exit  arrows move  type to edit"
     } else {
-        "↑↓/jk notes  [/] scroll  a new  i edit  g/G top/bottom  q quit"
+        "↑↓/jk navigate  h/l parent/enter  a new  i edit  [/] scroll  q quit"
     };
 
     let help = Paragraph::new(Span::styled(
@@ -220,7 +249,9 @@ fn render_create_prompt(frame: &mut Frame, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let label = Paragraph::new("Note name:").style(Style::default().fg(Color::DarkGray));
+    let current_dir = app.current_dir.display().to_string();
+    let label = Paragraph::new(format!("Note name (in {current_dir}):"))
+        .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(
         label,
         Rect {
@@ -248,7 +279,7 @@ fn render_create_prompt(frame: &mut Frame, app: &App) {
         .map(|err| Line::from(Span::styled(err, Style::default().fg(Color::Red))))
         .unwrap_or_else(|| {
             Line::from(Span::styled(
-                "Creates a .md file in the notes directory",
+                "Creates a .md file in the current folder",
                 Style::default().fg(Color::DarkGray),
             ))
         });

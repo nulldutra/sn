@@ -5,7 +5,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 
 use ratatui::widgets::ListState;
 
-use crate::notes::{self, Note};
+use crate::notes::{self, BrowserEntry, Note};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -15,7 +15,7 @@ pub enum Mode {
         error: Option<String>,
     },
     EditNote {
-        note_index: usize,
+        path: PathBuf,
         content: String,
         cursor: usize,
         status: Option<String>,
@@ -24,8 +24,9 @@ pub enum Mode {
 
 pub struct App {
     pub notes_dir: PathBuf,
+    pub current_dir: PathBuf,
     pub left_width: u16,
-    pub notes: Vec<Note>,
+    pub entries: Vec<BrowserEntry>,
     pub selected: usize,
     pub list_state: ListState,
     pub preview_scroll: u16,
@@ -37,12 +38,14 @@ impl App {
     pub fn new() -> io::Result<Self> {
         let notes_dir = notes::notes_dir();
         let left_width = notes::left_panel_width();
-        let notes = notes::load_notes(&notes_dir)?;
+        let current_dir = notes_dir.clone();
+        let entries = notes::list_directory(&notes_dir, &current_dir)?;
 
         Ok(Self {
             notes_dir,
+            current_dir,
             left_width,
-            notes,
+            entries,
             selected: 0,
             list_state: ListState::default(),
             preview_scroll: 0,
@@ -51,27 +54,41 @@ impl App {
         })
     }
 
-    pub fn reload_notes(&mut self) -> io::Result<()> {
-        let count = self.notes.len();
-        self.notes = notes::load_notes(&self.notes_dir)?;
+    pub fn reload_entries(&mut self) -> io::Result<()> {
+        let selected_path = self.selected_note().map(|note| note.path.clone());
+        self.entries = notes::list_directory(&self.notes_dir, &self.current_dir)?;
 
-        if self.notes.is_empty() {
+        if self.entries.is_empty() {
             self.selected = 0;
-        } else if self.selected >= self.notes.len() {
-            self.selected = self.notes.len() - 1;
-        } else if count != self.notes.len() {
-            // keep selection when possible
+        } else if self.selected >= self.entries.len() {
+            self.selected = self.entries.len() - 1;
         }
 
+        if let Some(path) = selected_path {
+            if let Some(index) = self
+                .entries
+                .iter()
+                .position(|entry| matches!(entry, BrowserEntry::Note(note) if note.path == path))
+            {
+                self.selected = index;
+            }
+        }
+
+        self.list_state.select(Some(self.selected));
         self.preview_scroll = 0;
         Ok(())
     }
 
-    fn reload_notes_and_select(&mut self, path: &Path) -> io::Result<()> {
-        self.reload_notes()?;
-        if let Some(idx) = self.notes.iter().position(|n| n.path == path) {
-            self.selected = idx;
-            self.list_state.select(Some(idx));
+    fn reload_entries_and_select(&mut self, path: &Path) -> io::Result<()> {
+        self.current_dir = path.parent().unwrap_or(&self.notes_dir).to_path_buf();
+        self.reload_entries()?;
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| matches!(entry, BrowserEntry::Note(note) if note.path == path))
+        {
+            self.selected = index;
+            self.list_state.select(Some(index));
         }
         Ok(())
     }
@@ -84,8 +101,20 @@ impl App {
         width
     }
 
+    pub fn notes_panel_title(&self) -> String {
+        let relative = notes::relative_dir(&self.notes_dir, &self.current_dir);
+        if relative.is_empty() {
+            " Notes ".to_string()
+        } else {
+            format!(" Notes /{relative} ")
+        }
+    }
+
     pub fn selected_note(&self) -> Option<&Note> {
-        self.notes.get(self.selected)
+        match self.entries.get(self.selected)? {
+            BrowserEntry::Note(note) => Some(note),
+            _ => None,
+        }
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
@@ -101,6 +130,8 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Char('a') => self.open_create_prompt(),
             KeyCode::Char('i') => self.open_edit_mode(),
+            KeyCode::Char('h') | KeyCode::Left => self.go_parent(),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => self.activate_selection(),
             KeyCode::Char('j') | KeyCode::Down => self.select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.select_prev(),
             KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::SHIFT) => self.select_last(),
@@ -121,9 +152,10 @@ impl App {
             KeyCode::Esc => self.mode = Mode::Normal,
             KeyCode::Enter => {
                 let name = input.clone();
-                match notes::create_note(&self.notes_dir, &name) {
+                let dir = self.current_dir.clone();
+                match notes::create_note(&dir, &name) {
                     Ok(path) => {
-                        let _ = self.reload_notes_and_select(&path);
+                        let _ = self.reload_entries_and_select(&path);
                         self.mode = Mode::Normal;
                     }
                     Err(err) => {
@@ -201,19 +233,20 @@ impl App {
     }
 
     fn save_and_exit_edit(&mut self) {
-        let (note_index, content) = match &self.mode {
-            Mode::EditNote {
-                note_index,
-                content,
-                ..
-            } => (*note_index, content.clone()),
+        let (path, content) = match &self.mode {
+            Mode::EditNote { path, content, .. } => (path.clone(), content.clone()),
             _ => return,
         };
 
-        let path = self.notes[note_index].path.clone();
         match notes::save_note(&path, &content) {
             Ok(()) => {
-                self.notes[note_index].content = content;
+                if let Some(BrowserEntry::Note(note)) = self
+                    .entries
+                    .iter_mut()
+                    .find(|entry| matches!(entry, BrowserEntry::Note(note) if note.path == path))
+                {
+                    note.content = content;
+                }
                 self.mode = Mode::Normal;
             }
             Err(err) => {
@@ -232,20 +265,44 @@ impl App {
     }
 
     fn open_edit_mode(&mut self) {
-        let Some(note) = self.notes.get(self.selected).cloned() else {
+        let Some(note) = self.selected_note().cloned() else {
             return;
         };
 
         self.mode = Mode::EditNote {
-            note_index: self.selected,
+            path: note.path,
             cursor: note.content.len(),
             content: note.content,
             status: None,
         };
     }
 
+    fn go_parent(&mut self) {
+        if self.current_dir == self.notes_dir {
+            return;
+        }
+
+        if let Some(parent) = self.current_dir.parent() {
+            self.current_dir = parent.to_path_buf();
+            self.selected = 0;
+            let _ = self.reload_entries();
+        }
+    }
+
+    fn activate_selection(&mut self) {
+        match self.entries.get(self.selected) {
+            Some(BrowserEntry::Parent) => self.go_parent(),
+            Some(BrowserEntry::Directory { path, .. }) => {
+                self.current_dir = path.clone();
+                self.selected = 0;
+                let _ = self.reload_entries();
+            }
+            _ => {}
+        }
+    }
+
     fn select_next(&mut self) {
-        if self.selected + 1 < self.notes.len() {
+        if self.selected + 1 < self.entries.len() {
             self.selected += 1;
             self.list_state.select(Some(self.selected));
             self.preview_scroll = 0;
@@ -261,7 +318,7 @@ impl App {
     }
 
     fn select_first(&mut self) {
-        if !self.notes.is_empty() {
+        if !self.entries.is_empty() {
             self.selected = 0;
             self.list_state.select(Some(0));
             self.preview_scroll = 0;
@@ -269,33 +326,45 @@ impl App {
     }
 
     fn select_last(&mut self) {
-        if !self.notes.is_empty() {
-            self.selected = self.notes.len() - 1;
+        if !self.entries.is_empty() {
+            self.selected = self.entries.len() - 1;
             self.list_state.select(Some(self.selected));
             self.preview_scroll = 0;
         }
     }
 
     fn scroll_preview_up(&mut self) {
-        self.preview_scroll = self.preview_scroll.saturating_sub(1);
+        if self.selected_note().is_some() {
+            self.preview_scroll = self.preview_scroll.saturating_sub(1);
+        }
     }
 
     fn scroll_preview_down(&mut self) {
-        self.preview_scroll = self.preview_scroll.saturating_add(1);
+        if self.selected_note().is_some() {
+            self.preview_scroll = self.preview_scroll.saturating_add(1);
+        }
     }
 
     pub fn preview_content(&self) -> Option<&str> {
-        if let Mode::EditNote {
-            content,
-            note_index,
-            ..
-        } = &self.mode
-        {
-            if *note_index == self.selected {
+        if let Mode::EditNote { content, path, .. } = &self.mode {
+            if self.selected_note().is_some_and(|note| &note.path == path) {
                 return Some(content.as_str());
             }
         }
         self.selected_note().map(|note| note.content.as_str())
+    }
+
+    pub fn preview_title(&self) -> String {
+        if let Some(note) = self.selected_note() {
+            let relative = notes::relative_path(&self.notes_dir, &note.path);
+            if self.is_editing_selected() {
+                format!(" {relative} [EDIT] ")
+            } else {
+                format!(" {relative} ")
+            }
+        } else {
+            " Preview ".to_string()
+        }
     }
 
     pub fn clamp_preview_scroll(&mut self, visible_lines: u16) {
@@ -350,10 +419,10 @@ impl App {
     }
 
     pub fn is_editing_selected(&self) -> bool {
-        matches!(
-            &self.mode,
-            Mode::EditNote { note_index, .. } if *note_index == self.selected
-        )
+        match (&self.mode, self.selected_note()) {
+            (Mode::EditNote { path, .. }, Some(note)) => path == &note.path,
+            _ => false,
+        }
     }
 
     pub fn is_editing(&self) -> bool {
@@ -371,14 +440,14 @@ impl App {
         let Mode::EditNote {
             content,
             cursor,
-            note_index,
+            path,
             ..
         } = &self.mode
         else {
             return None;
         };
 
-        if *note_index != self.selected {
+        if self.selected_note().is_none_or(|note| &note.path != path) {
             return None;
         }
 
